@@ -19,14 +19,23 @@ const NFCReadButton = () => {
   // Request tech
   async function requestTech(): Promise<string> {
     if (Platform.OS === "android") {
-      await NfcManager.requestTechnology([
-        NfcTech.Ndef,
-        NfcTech.NfcA,
-        NfcTech.IsoDep,
-        NfcTech.MifareClassic,
-      ]);
+      try {
+        await NfcManager.requestTechnology([
+          NfcTech.Ndef,
+          NfcTech.NfcA,
+          NfcTech.IsoDep,
+          NfcTech.MifareClassic,
+        ]);
+      } catch (error) {
+        console.log("Tech request error:", error);
+        throw error;
+      }
     } else {
-      await NfcManager.requestTechnology([NfcTech.Ndef, NfcTech.IsoDep]);
+      try {
+        await NfcManager.requestTechnology([NfcTech.Ndef, NfcTech.IsoDep]);
+      } catch (error) {
+        console.log("Tech request error:", error);
+      }
     }
     const tag = await NfcManager.getTag();
     if (tag?.ndefMessage) {
@@ -70,26 +79,54 @@ const NFCReadButton = () => {
   };
 
   async function handleOnPress() {
-    setLoading(true);
-    const type = await requestTech();
-    setTimeout(() => {
-      setLoading(false);
-      readNfc(type);
-      Alert.alert("Scan", "Scan NFC");
-    }, 2000);
-  }
+    try {
+      // Check if NFC is supported
+      const isSupported = await NfcManager.isSupported();
+      if (!isSupported) {
+        Alert.alert("Error", "NFC is not supported on this device");
+        return;
+      }
 
+      // Check if NFC is enabled
+      const isEnabled = await NfcManager.isEnabled();
+      if (!isEnabled) {
+        Alert.alert("Error", "Please enable NFC in your device settings");
+        return;
+      }
+
+      setLoading(true);
+      const type = await requestTech();
+      console.log("NFC Type detected:", type);
+
+      readNfc(type);
+      Alert.alert("Ready", "Hold your NFC card close to the device");
+    } catch (error) {
+      console.error("NFC Error:", error);
+      Alert.alert("Error", "Failed to initialize NFC: " + error);
+    } finally {
+      setLoading(false);
+    }
+  }
   // Function to read NFC
   async function readNfc(type: string) {
-    switch (type) {
-      case "NDEF":
-        await readNDef();
-        break;
-      case "MifareClassic":
-        await readMiFare();
-        break;
-      default:
-        break;
+    try {
+      console.log("Starting NFC read with type:", type);
+
+      switch (type) {
+        case "NDEF":
+          await readNDef();
+          break;
+        case "MifareClassic":
+          await readMiFare();
+          break;
+        default:
+          console.log("Unsupported NFC type:", type);
+          Alert.alert("Error", "Unsupported NFC card type");
+          break;
+      }
+    } catch (error) {
+      console.error("Read NFC Error:", error);
+      Alert.alert("Error", "Failed to read NFC: " + error);
     }
   }
   // Function to read text from NFC - NDef
