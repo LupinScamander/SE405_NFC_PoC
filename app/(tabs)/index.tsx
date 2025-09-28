@@ -1,7 +1,14 @@
 import NFCReadButton from "@/components/nfc-read-button";
 import NfcRewriteButton from "@/components/nfc-rewrite-button";
-import { useEffect } from "react";
-import { Alert, ImageBackground, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import {
+  Alert,
+  ImageBackground,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import NfcManager from "react-native-nfc-manager";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -17,10 +24,29 @@ async function initNFC() {
 }
 export default function HomeScreen() {
   const image = require("@/assets/images/nfc-bg.jpg");
+  const [showContactShare, setShowContactShare] = useState(false);
 
   useEffect(() => {
     initNFC();
   }, []);
+
+  if (showContactShare) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+        <View style={styles.contactContainer}>
+          <View style={styles.headerContainer}>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => setShowContactShare(false)}
+            >
+              <Text style={styles.backButtonText}>← Back</Text>
+            </TouchableOpacity>
+            <Text style={styles.contactTitle}>Contact Sharing</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
@@ -30,6 +56,12 @@ export default function HomeScreen() {
           <View style={styles.nfcContainer}>
             <NfcRewriteButton />
             <NFCReadButton />
+            <TouchableOpacity
+              style={styles.contactButton}
+              onPress={() => setShowContactShare(true)}
+            >
+              <Text style={styles.contactButtonText}>📇 Share Contacts</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ImageBackground>
@@ -68,5 +100,43 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: "rgba(255, 255, 255, 0.1)",
     borderRadius: 12,
+  },
+  contactButton: {
+    backgroundColor: "#FF6B35",
+    padding: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  contactButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  contactContainer: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
+  headerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    backgroundColor: "#f8f8f8",
+    borderBottomWidth: 1,
+    borderBottomColor: "#ddd",
+  },
+  backButton: {
+    padding: 8,
+  },
+  backButtonText: {
+    fontSize: 16,
+    color: "#007AFF",
+    fontWeight: "bold",
+  },
+  contactTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#333",
+    marginLeft: 16,
   },
 });
