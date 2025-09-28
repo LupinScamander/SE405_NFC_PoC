@@ -16,43 +16,6 @@ const NFCReadButton = () => {
   const [scannedText, setScannedText] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Request tech
-  async function requestTech(): Promise<string> {
-    if (Platform.OS === "android") {
-      try {
-        await NfcManager.requestTechnology([
-          NfcTech.Ndef,
-          NfcTech.NfcA,
-          NfcTech.IsoDep,
-          NfcTech.MifareClassic,
-        ]);
-      } catch (error) {
-        console.log("Tech request error:", error);
-        throw error;
-      }
-    } else {
-      try {
-        await NfcManager.requestTechnology([NfcTech.Ndef, NfcTech.IsoDep]);
-      } catch (error) {
-        console.log("Tech request error:", error);
-      }
-    }
-    const tag = await NfcManager.getTag();
-    if (tag?.ndefMessage) {
-      return "NDEF";
-    }
-
-    if (tag?.techTypes?.includes("android.nfc.tech.MifareClassic")) {
-      return "MifareClassic";
-    }
-
-    if (tag?.techTypes?.includes("android.nfc.tech.IsoDep")) {
-      return "ISO-DEP";
-    }
-
-    return "Unknown";
-  }
-
   // Clear scanned text after 10 seconds
   useEffect(() => {
     if (scannedText) {
@@ -95,33 +58,81 @@ const NFCReadButton = () => {
       }
 
       setLoading(true);
-      const type = await requestTech();
-      console.log("NFC Type detected:", type);
-
-      readNfc(type);
       Alert.alert("Ready", "Hold your NFC card close to the device");
+
+      // Request technology and wait for tag - avoiding MifareClassic to prevent auto-authentication
+      if (Platform.OS === "android") {
+        await NfcManager.requestTechnology([
+          NfcTech.Ndef,
+          NfcTech.NfcA,
+          NfcTech.IsoDep,
+        ]);
+      } else {
+        await NfcManager.requestTechnology([NfcTech.Ndef, NfcTech.IsoDep]);
+      }
+
+      // Get tag and determine type
+      const tag = await NfcManager.getTag();
+      let type = "Unknown";
+
+      console.log("Tag detected:", tag);
+      console.log("Tech types:", tag?.techTypes);
+
+      // Priority order: NDEF > NfcA > IsoDep > MifareClassic (NfcA first to avoid casting issues)
+      if (tag?.ndefMessage) {
+        type = "NDEF";
+      } else if (tag?.techTypes?.includes("android.nfc.tech.NfcA")) {
+        // For cards that support both NfcA and MifareClassic, prefer NfcA to avoid casting issues
+        type = "NfcA";
+      } else if (tag?.techTypes?.includes("android.nfc.tech.IsoDep")) {
+        type = "ISO-DEP";
+      } else if (tag?.techTypes?.includes("android.nfc.tech.MifareClassic")) {
+        type = "MifareClassic";
+      }
+
+      console.log("NFC Type detected:", type);
+      console.log("About to call readNfc with type:", type);
+      await readNfc(type, tag);
     } catch (error) {
       console.error("NFC Error:", error);
-      Alert.alert("Error", "Failed to initialize NFC: " + error);
+      Alert.alert("Error", "Failed to read NFC: " + error);
     } finally {
       setLoading(false);
+      NfcManager.cancelTechnologyRequest();
     }
   }
   // Function to read NFC
-  async function readNfc(type: string) {
+  async function readNfc(type: string, tag: any) {
     try {
       console.log("Starting NFC read with type:", type);
+      console.log("Switch statement - type is:", type);
 
       switch (type) {
         case "NDEF":
+          console.log("Calling readNDef");
           await readNDef();
           break;
         case "MifareClassic":
+          console.log("Calling readMiFare");
           await readMiFare();
+          break;
+        case "NfcA":
+          console.log("Calling readNfcA");
+          await readNfcA(tag);
+          break;
+        case "ISO-DEP":
+          console.log("Calling readIsoDep");
+          await readIsoDep(tag);
           break;
         default:
           console.log("Unsupported NFC type:", type);
-          Alert.alert("Error", "Unsupported NFC card type");
+          // Show basic tag info for unsupported types
+          Alert.alert(
+            "Tag Info",
+            `Type: ${tag?.type || "Unknown"}\nUID: ${
+              tag?.id || "Unknown"
+            }\nTech Types: ${tag?.techTypes?.join(", ") || "None"}`
+          );
           break;
       }
     } catch (error) {
@@ -155,12 +166,121 @@ const NFCReadButton = () => {
     } catch (ex) {
       console.warn("NFC read error", ex);
       setScannedText(null);
-    } finally {
-      NfcManager.cancelTechnologyRequest();
+      throw ex;
     }
   }
 
-  // Function to read Mifare
+  // Function to read NfcA cards
+  async function readNfcA(tag: any) {
+    try {
+      console.log(
+        "🔥 INSIDE readNfcA function - this should NOT call MifareClassic!"
+      );
+      console.log("Reading NfcA card with tag:", tag);
+
+      // For NfcA cards, we can try to read basic information
+      const uid = tag?.id;
+      const atqa = tag?.atqa;
+      const sak = tag?.sak;
+
+      let info = `UID: ${uid}\n`;
+      if (atqa) info += `ATQA: ${atqa}\n`;
+      if (sak) info += `SAK: ${sak}\n`;
+
+      console.log("NfcA info built:", info);
+
+      let cardContent = null;
+
+      // Try to read as NDEF if possible
+      if (tag?.ndefMessage) {
+        console.log("Tag has NDEF message, decoding...");
+        const ndefRecord = tag.ndefMessage[0];
+        const payload = ndefRecord.payload;
+        const payloadBytes = Uint8Array.from(payload);
+        const text = Ndef.text.decodePayload(payloadBytes);
+        info += `NDEF Content: ${text}\n`;
+        cardContent = text;
+      } else {
+        console.log("No NDEF message found, trying to read data blocks...");
+
+        // Try to read data blocks using NfcA commands
+        try {
+          console.log("Attempting to read data blocks via NfcA transceive...");
+
+          // Try reading common data blocks (blocks 4-6 often contain user data)
+          const blocksToRead = [4, 5, 6, 8, 9, 10];
+          let foundData = false;
+
+          for (const blockNum of blocksToRead) {
+            try {
+              console.log(`Reading block ${blockNum}...`);
+              // Use NfcManager.transceive directly for NfcA commands
+              const blockData = await NfcManager.transceive([0x30, blockNum]); // MIFARE read command
+
+              if (blockData && blockData.length > 0) {
+                // Convert to text
+                const textData = String.fromCharCode(
+                  ...blockData.filter((byte: number) => byte >= 32 && byte <= 126)
+                );
+                if (textData.trim().length > 0) {
+                  console.log(`Block ${blockNum} contains: ${textData}`);
+                  info += `Block ${blockNum}: ${textData.trim()}\n`;
+                  if (!cardContent) cardContent = textData.trim();
+                  foundData = true;
+                }
+              }
+            } catch (blockError) {
+              console.log(`Could not read block ${blockNum}:`, blockError);
+            }
+          }
+
+          if (!foundData) {
+            info += "No readable text data found in common blocks\n";
+          }
+        } catch (nfcAError) {
+          console.log("NfcA transceive not available or failed:", nfcAError);
+          info += "Direct block reading not available\n";
+        }
+      }
+
+      // Set the scanned text to show in UI
+      setScannedText(cardContent || uid);
+
+      console.log("Final info:", info);
+      console.log("About to show NfcA alert");
+      Alert.alert("NfcA Card Info", info);
+      console.log("✅ readNfcA completed successfully");
+    } catch (ex) {
+      console.warn("❌ NfcA read error:", ex);
+      // Fallback to basic info
+      Alert.alert("NfcA Card", `UID: ${tag?.id || "Unknown"}`);
+      setScannedText(tag?.id || "Unknown NfcA card");
+    }
+  }
+
+  // Function to read ISO-DEP cards
+  async function readIsoDep(tag: any) {
+    try {
+      console.log("Reading ISO-DEP card...");
+
+      const uid = tag?.id;
+      const historicalBytes = tag?.historicalBytes;
+      const hiLayerResponse = tag?.hiLayerResponse;
+
+      let info = `UID: ${uid}\n`;
+      if (historicalBytes) info += `Historical Bytes: ${historicalBytes}\n`;
+      if (hiLayerResponse) info += `Hi Layer Response: ${hiLayerResponse}\n`;
+
+      setScannedText(uid);
+      Alert.alert("ISO-DEP Card Info", info);
+    } catch (ex) {
+      console.warn("ISO-DEP read error:", ex);
+      Alert.alert("ISO-DEP Card", `UID: ${tag?.id || "Unknown"}`);
+      setScannedText(tag?.id || "Unknown ISO-DEP card");
+    }
+  }
+
+  // Function to read Mifare Classic cards
   async function readMiFare() {
     try {
       const mifare = NfcManager.mifareClassicHandlerAndroid;
@@ -180,10 +300,10 @@ const NFCReadButton = () => {
       const text = String.fromCharCode(...byteArray);
       console.log("Decoded Block:", text);
       setScannedText(text);
+      Alert.alert("Content", text);
     } catch (ex) {
       console.warn("MifareClassic error:", ex);
-    } finally {
-      NfcManager.cancelTechnologyRequest();
+      throw ex;
     }
   }
   return (
